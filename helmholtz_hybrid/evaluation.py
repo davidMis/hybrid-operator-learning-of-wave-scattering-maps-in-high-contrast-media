@@ -6,9 +6,10 @@ from __future__ import annotations
 
 import json
 import re
+import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import numpy as np
 import torch
@@ -29,6 +30,7 @@ from helmholtz_hybrid.runtime import set_default_cache_dirs
 MODEL_TYPES = ("fno", "scot", "hybrid")
 SINGLE_MODEL_TASKS = ("smooth2smooth", "contrast", "sharp2sharp")
 EVALUATION_SPLITS = ("validation", "test")
+ProgressCallback = Callable[[int, int | None], None]
 
 
 @dataclass(frozen=True)
@@ -96,7 +98,13 @@ def validate_evaluation_request(request: EvaluationRequest) -> None:
         raise ValueError("Hybrid evaluation requires FNO smooth and scOT contrast checkpoint directories.")
 
 
-def evaluate_checkpoint(request: EvaluationRequest) -> EvaluationResult:
+def evaluate_checkpoint(
+    request: EvaluationRequest,
+    *,
+    progress_callback: ProgressCallback | None = None,
+    show_progress: bool = True,
+    progress_position: int = 0,
+) -> EvaluationResult:
     """Evaluate one FNO, scOT, or hybrid checkpoint specification."""
 
     validate_evaluation_request(request)
@@ -117,6 +125,9 @@ def evaluate_checkpoint(request: EvaluationRequest) -> EvaluationResult:
             workers=request.workers,
             store_predictions=request.store_predictions,
             progress_label=progress_label(request, f"FNO {request.dataset} {request.task}"),
+            progress_callback=progress_callback,
+            show_progress=show_progress,
+            progress_position=progress_position,
         )
         parameters = model_parameter_count(model)
     elif request.model_type == "scot":
@@ -131,6 +142,9 @@ def evaluate_checkpoint(request: EvaluationRequest) -> EvaluationResult:
             workers=request.workers,
             store_predictions=request.store_predictions,
             progress_label=progress_label(request, f"scOT {request.dataset} {request.task}"),
+            progress_callback=progress_callback,
+            show_progress=show_progress,
+            progress_position=progress_position,
         )
         parameters = model_parameter_count(model)
     else:
@@ -147,6 +161,9 @@ def evaluate_checkpoint(request: EvaluationRequest) -> EvaluationResult:
             workers=request.workers,
             store_predictions=request.store_predictions,
             progress_label=progress_label(request, f"hybrid {request.dataset} sharp"),
+            progress_callback=progress_callback,
+            show_progress=show_progress,
+            progress_position=progress_position,
         )
         parameters = model_parameter_count(smooth_model) + model_parameter_count(contrast_model)
 
@@ -230,6 +247,35 @@ def make_evaluation_loader(dataset, batch_size: int, device: torch.device, worke
         shuffle=False,
         **dataloader_performance_kwargs(workers, device.type == "cuda"),
     )
+
+
+def iter_with_progress(
+    loader: DataLoader,
+    *,
+    progress_label: str,
+    progress_callback: ProgressCallback | None,
+    show_progress: bool,
+    progress_position: int,
+):
+    """Yield batches while reporting progress either locally or to a caller."""
+
+    total_batches = len(loader)
+    if progress_callback is not None:
+        progress_callback(0, total_batches)
+    iterator = loader
+    if show_progress:
+        iterator = tqdm(
+            loader,
+            desc=progress_label,
+            unit="batch",
+            dynamic_ncols=True,
+            position=progress_position,
+            disable=not sys.stderr.isatty(),
+        )
+    for batch in iterator:
+        yield batch
+        if progress_callback is not None:
+            progress_callback(1, total_batches)
 
 
 def collect_prediction_batch(
@@ -318,6 +364,9 @@ def evaluate_fno(
     workers: int = 4,
     store_predictions: bool = False,
     progress_label: str = "FNO evaluation",
+    progress_callback: ProgressCallback | None = None,
+    show_progress: bool = True,
+    progress_position: int = 0,
 ) -> PredictionResult:
     model.eval()
     loader = make_evaluation_loader(dataset, batch_size, device, workers)
@@ -326,7 +375,13 @@ def evaluate_fno(
     actual_chunks: list[np.ndarray] = []
 
     with torch.inference_mode():
-        for batch in tqdm(loader, desc=progress_label, unit="batch", dynamic_ncols=True):
+        for batch in iter_with_progress(
+            loader,
+            progress_label=progress_label,
+            progress_callback=progress_callback,
+            show_progress=show_progress,
+            progress_position=progress_position,
+        ):
             expected = move_to_device(batch["y"], device)
             actual = model(move_to_device(batch["x"], device))
             per_sample_chunks.append(relative_complex_l2(actual, expected).cpu().numpy())
@@ -344,6 +399,9 @@ def evaluate_scot(
     workers: int = 4,
     store_predictions: bool = False,
     progress_label: str = "scOT evaluation",
+    progress_callback: ProgressCallback | None = None,
+    show_progress: bool = True,
+    progress_position: int = 0,
 ) -> PredictionResult:
     model.eval()
     wrapped = ScOTDatasetWrapper(dataset, which="test")
@@ -353,7 +411,13 @@ def evaluate_scot(
     actual_chunks: list[np.ndarray] = []
 
     with torch.inference_mode():
-        for batch in tqdm(loader, desc=progress_label, unit="batch", dynamic_ncols=True):
+        for batch in iter_with_progress(
+            loader,
+            progress_label=progress_label,
+            progress_callback=progress_callback,
+            show_progress=show_progress,
+            progress_position=progress_position,
+        ):
             expected = move_to_device(batch["labels"], device)
             output = model(move_to_device(batch["pixel_values"], device))
             actual = scot_predictions(output)
@@ -373,6 +437,9 @@ def evaluate_hybrid(
     workers: int = 4,
     store_predictions: bool = False,
     progress_label: str = "hybrid evaluation",
+    progress_callback: ProgressCallback | None = None,
+    show_progress: bool = True,
+    progress_position: int = 0,
 ) -> PredictionResult:
     smooth_model.eval()
     contrast_model.eval()
@@ -382,7 +449,13 @@ def evaluate_hybrid(
     actual_chunks: list[np.ndarray] = []
 
     with torch.inference_mode():
-        for batch in tqdm(loader, desc=progress_label, unit="batch", dynamic_ncols=True):
+        for batch in iter_with_progress(
+            loader,
+            progress_label=progress_label,
+            progress_callback=progress_callback,
+            show_progress=show_progress,
+            progress_position=progress_position,
+        ):
             x = move_to_device(batch["x"], device)
             expected = move_to_device(batch["y"], device)
             velocity_smooth = x[:, 0:1]

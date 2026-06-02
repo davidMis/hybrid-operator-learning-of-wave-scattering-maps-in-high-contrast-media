@@ -195,36 +195,24 @@ train_models() {
 
 evaluate_models() {
   mkdir -p "$EVALUATION_ROOT"
-  local task size
-  for task in "${TASKS[@]}"; do
-    for size in "${SIZES[@]}"; do
-      "$PYTHON" scripts/evaluate.py \
-        --model-type fno \
-        --task "$task" \
-        --checkpoint "$(fno_checkpoint "$task" "$size")" \
-        --data-root "$DATA_ROOT" \
-        --dataset "$DATASET" \
-        --output-json "${EVALUATION_ROOT}/fno_${DATASET}_${task}_layers${size}.json"
+  local -a device_args=()
+  if [[ -n "${EVALUATION_DEVICES:-}" ]]; then
+    device_args+=(--devices "$EVALUATION_DEVICES")
+  fi
+  if [[ -n "${EVALUATION_MAX_PARALLEL:-}" ]]; then
+    device_args+=(--max-parallel "$EVALUATION_MAX_PARALLEL")
+  fi
 
-      "$PYTHON" scripts/evaluate.py \
-        --model-type scot \
-        --task "$task" \
-        --checkpoint "$(scot_checkpoint "$task" "$size")" \
-        --data-root "$DATA_ROOT" \
-        --dataset "$DATASET" \
-        --output-json "${EVALUATION_ROOT}/scot_${DATASET}_${task}_depths${size}.json"
-    done
-  done
-
-  for size in "${SIZES[@]}"; do
-    "$PYTHON" scripts/evaluate.py \
-      --model-type hybrid \
-      --fno-smooth-checkpoint "$(fno_checkpoint smooth2smooth "$size")" \
-      --scot-contrast-checkpoint "$(scot_checkpoint contrast "$size")" \
-      --data-root "$DATA_ROOT" \
-      --dataset "$DATASET" \
-      --output-json "${EVALUATION_ROOT}/hybrid_${DATASET}_sharp_layers${size}.json"
-  done
+  "$PYTHON" scripts/evaluate.py \
+    --sweep \
+    --checkpoint-root "$CHECKPOINT_ROOT" \
+    --output-dir "$EVALUATION_ROOT" \
+    --data-root "$DATA_ROOT" \
+    --dataset "$DATASET" \
+    --workers "${EVALUATION_WORKERS:-4}" \
+    --sizes "${SIZES[@]}" \
+    --tasks "${TASKS[@]}" \
+    "${device_args[@]}"
 }
 
 plot_figures() {

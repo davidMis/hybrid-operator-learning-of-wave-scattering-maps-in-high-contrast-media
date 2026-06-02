@@ -121,7 +121,9 @@ bash run_all.sh
 
 `run_all.sh` prepares processed arrays if they are missing, evaluates the
 existing checkpoints, collects metrics, and regenerates the paper-style figures.
-`MODEL_ACTION=evaluate` skips training and reads checkpoints from
+Checkpoint evaluation is scheduled across all visible CUDA devices with an
+overall progress bar and one active-task bar per device. `MODEL_ACTION=evaluate`
+skips training and reads checkpoints from
 `outputs/checkpoints/<dataset>/<model-version>/`.
 
 ## Data Layout
@@ -266,6 +268,23 @@ python scripts/evaluate.py \
 Evaluation streams per-sample metrics by default and only retains full prediction
 fields when `--predictions-out` is supplied. Use `--workers` to tune DataLoader
 parallelism for your storage and CPU configuration.
+
+Full checkpoint sweep:
+
+```bash
+python scripts/evaluate.py \
+  --sweep \
+  --checkpoint-root outputs/checkpoints/const_back/paper \
+  --output-dir results/const_back/paper/evaluation \
+  --data-root data/processed \
+  --dataset const_back
+```
+
+Sweep mode uses all visible CUDA devices by default, or CPU if CUDA is
+unavailable. Use `--devices cuda:0,cuda:1` or `--max-parallel` to override the
+device set. `run_all.sh` forwards `EVALUATION_DEVICES`,
+`EVALUATION_MAX_PARALLEL`, and `EVALUATION_WORKERS` when those environment
+variables are set.
 
 ## Figures
 
