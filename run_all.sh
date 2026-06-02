@@ -242,6 +242,8 @@ plot_figures() {
     --fno-smooth-checkpoint "$(fno_checkpoint smooth2smooth 10)" \
     --scot-contrast-checkpoint "$(scot_checkpoint contrast 10)" \
     --output "${FIGURES_ROOT}/result_comparison.png"
+
+  echo "Wrote figures to ${FIGURES_ROOT}"
 }
 
 prepare_data

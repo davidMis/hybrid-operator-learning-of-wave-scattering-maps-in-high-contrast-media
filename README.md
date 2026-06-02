@@ -121,9 +121,8 @@ bash run_all.sh
 
 `run_all.sh` prepares processed arrays if they are missing, evaluates the
 existing checkpoints, collects metrics, and regenerates the paper-style figures.
-Checkpoint evaluation is scheduled across all visible CUDA devices with an
-overall progress bar and one active-task bar per device. `MODEL_ACTION=evaluate`
-skips training and reads checkpoints from
+Checkpoint evaluation is scheduled across all visible CUDA devices.
+`MODEL_ACTION=evaluate` skips training and reads checkpoints from
 `outputs/checkpoints/<dataset>/<model-version>/`.
 
 ## Data Layout
