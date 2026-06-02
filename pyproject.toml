@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hybrid-helmholtz-architectures"
+version = "0.1.0"
+description = "Reproducibility code for hybrid FNO/scOT Helmholtz scattering experiments"
+requires-python = ">=3.10,<3.12"
+dependencies = [
+    "torch>=2.7,<2.8",
+    "torchvision>=0.22,<0.23",
+    "numpy<2.0",
+    "matplotlib",
+    "tqdm",
+    "neuraloperator",
+    "transformers==4.29.2",
+    "accelerate==0.31.0",
+    "h5py",
+    "pandas",
+    "pyyaml",
+    "huggingface_hub>=0.36",
+]
+
+[project.optional-dependencies]
+logging = ["wandb==0.14.2"]
+
+[tool.setuptools.packages.find]
+include = ["helmholtz_hybrid*"]

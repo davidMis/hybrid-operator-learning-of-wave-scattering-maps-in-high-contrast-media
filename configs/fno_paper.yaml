@@ -1,0 +1,14 @@
+# Paper FNO defaults shared by all tasks and layer counts.
+# The run script still supplies dataset, task, output directory, run name, seed,
+# and the swept num_layers value.
+batch_size: 32
+epochs: 100
+warmup_epochs: 5
+learning_rate: 1.0e-3
+weight_decay: 1.0e-4
+eta_min: 3.0e-6
+workers: 4
+num_modes: 64
+hidden_channels: 64
+domain_padding: 0.125
+deterministic: true

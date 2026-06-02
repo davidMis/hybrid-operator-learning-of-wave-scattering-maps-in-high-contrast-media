@@ -1,0 +1,18 @@
+# Paper scOT defaults shared by all tasks and depth counts.
+# The run script still supplies dataset, task, output directory, run name, seed,
+# and the swept depths value.
+batch_size: 32
+epochs: 100
+warmup_epochs: 5
+learning_rate: 1.0e-3
+weight_decay: 1.0e-4
+max_grad_norm: 1.0
+workers: 4
+patch_size: 4
+embed_dim: 90
+num_heads: [3, 6, 12, 24]
+skip_connections: [2, 2, 2, 0]
+window_size: 8
+mlp_ratio: 4.0
+loss_p: 2
+deterministic: true

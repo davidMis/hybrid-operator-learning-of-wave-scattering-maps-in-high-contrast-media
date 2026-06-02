@@ -1,0 +1,16 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+.venv/
+.env
+.hf_staging/
+
+data/
+outputs/
+results/
+checkpoints/
+fno_runs/
+logs/
+wandb/
