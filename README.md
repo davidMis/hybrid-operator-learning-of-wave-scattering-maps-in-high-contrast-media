@@ -191,6 +191,10 @@ Raw pressure arrays are complex `[N,H,W]` arrays. Prepared pressure arrays are r
 
 The paper trains FNO and scOT models on all three tasks and sweeps FNO layers/scOT depths over `2, 4, 6, 8, 10`. Fixed paper hyperparameters live in `configs/fno_paper.yaml` and `configs/scot_paper.yaml`; the CLI supplies only the dataset, task, sweep size, seed, and output naming. Use a fixed `--seed` and a matching `MODEL_VERSION`, such as `seed123`, for reproducible reruns. Each training script writes a native checkpoint plus `run_manifest.json` with command-line arguments, parameter count, package/runtime metadata, and Git state.
 
+The paper configs request deterministic CUDA behavior and leave TF32 disabled.
+For faster exploratory reruns on supported NVIDIA GPUs, pass
+`--no-deterministic --allow-tf32` to the training scripts.
+
 When `--output-root` is omitted, single training runs write to
 `outputs/checkpoints/<dataset>/seed<seed>/{fno,scot}/`.
 
@@ -258,6 +262,10 @@ python scripts/evaluate.py \
   --data-root data/processed \
   --dataset const_back
 ```
+
+Evaluation streams per-sample metrics by default and only retains full prediction
+fields when `--predictions-out` is supplied. Use `--workers` to tune DataLoader
+parallelism for your storage and CPU configuration.
 
 ## Figures
 

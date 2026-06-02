@@ -20,6 +20,14 @@ def complex_L2_norm(x: torch.Tensor) -> torch.Tensor:
     return torch.square(x).sum(dim=1).mean(dim=(1, 2)).sqrt()
 
 
+def relative_complex_l2(y_pred: torch.Tensor, y: torch.Tensor, eps: float = 1e-8) -> torch.Tensor:
+    """Return per-sample relative complex L2 errors for pressure predictions."""
+
+    if y_pred.shape != y.shape:
+        raise ValueError(f"Prediction and target shapes must match; got {y_pred.shape} and {y.shape}.")
+    return complex_L2_norm(y_pred - y) / (complex_L2_norm(y) + eps)
+
+
 class ComplexL2Loss:
     """Callable relative/absolute complex L2 loss compatible with Trainer APIs."""
 
@@ -40,12 +48,9 @@ class ComplexL2Loss:
         if y_pred.ndim != 4 or y_pred.shape[1] != 2:
             raise ValueError(f"Expected tensors with shape [N, 2, H, W], got {tuple(y_pred.shape)}.")
 
-        diff = y_pred - y
-        numerator = complex_L2_norm(diff)
-
         if self.relative:
-            result = numerator / (complex_L2_norm(y) + self.eps)
+            result = relative_complex_l2(y_pred, y, self.eps)
         else:
-            result = numerator
+            result = complex_L2_norm(y_pred - y)
 
         return result.sum()

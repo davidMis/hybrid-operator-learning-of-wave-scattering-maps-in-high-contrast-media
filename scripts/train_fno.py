@@ -22,7 +22,7 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader
 
-from helmholtz_hybrid.data import TASKS, load_task_dataset
+from helmholtz_hybrid.data import TASKS, dataloader_performance_kwargs, load_task_dataset
 from helmholtz_hybrid.cli_config import apply_yaml_defaults, config_path_from_argv
 from helmholtz_hybrid.loss import ComplexL2Loss
 from helmholtz_hybrid.reproducibility import (
@@ -245,16 +245,14 @@ def main() -> None:
         train_dataset,
         batch_size=args.batch_size,
         shuffle=True,
-        num_workers=args.workers,
-        pin_memory=device.type == "cuda",
         generator=generator,
+        **dataloader_performance_kwargs(args.workers, device.type == "cuda"),
     )
     validation_loader = DataLoader(
         validation_dataset,
         batch_size=args.batch_size,
         shuffle=False,
-        num_workers=args.workers,
-        pin_memory=device.type == "cuda",
+        **dataloader_performance_kwargs(args.workers, device.type == "cuda"),
     )
 
     # The paper sweep varies num_layers while keeping 64 modes and 64 hidden

@@ -77,6 +77,12 @@ def parse_args() -> argparse.Namespace:
         help="Evaluation batch size.",
     )
     parser.add_argument(
+        "--workers",
+        type=int,
+        default=4,
+        help="Number of DataLoader worker processes used during evaluation.",
+    )
+    parser.add_argument(
         "--device",
         default="auto",
         help="Torch device used for inference, for example cuda, cuda:0, or cpu; auto selects CUDA when available.",
@@ -109,6 +115,8 @@ def request_kwargs_from_args(args: argparse.Namespace) -> dict[str, object]:
         "fno_smooth_checkpoint": args.fno_smooth_checkpoint,
         "scot_contrast_checkpoint": args.scot_contrast_checkpoint,
         "batch_size": args.batch_size,
+        "workers": args.workers,
+        "store_predictions": args.predictions_out is not None,
         "device": None if args.device == "auto" else args.device,
     }
 

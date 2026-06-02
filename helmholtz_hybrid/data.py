@@ -18,7 +18,23 @@ SPLITS = ("train", "validation", "test")
 
 
 def _load_array(directory: str | Path, filename: str) -> np.ndarray:
-    return np.load(Path(directory) / filename, mmap_mode="r")
+    # Copy-on-write mmap keeps samples tensor-compatible without copying each
+    # read-only slice in __getitem__; any accidental writes stay private.
+    return np.load(Path(directory) / filename, mmap_mode="c")
+
+
+def dataloader_performance_kwargs(num_workers: int, use_cuda: bool) -> dict[str, object]:
+    """Return DataLoader options that reduce host/device input stalls."""
+
+    if num_workers < 0:
+        raise ValueError(f"DataLoader worker count must be non-negative; got {num_workers}.")
+    kwargs: dict[str, object] = {
+        "num_workers": num_workers,
+        "pin_memory": use_cuda,
+    }
+    if num_workers > 0:
+        kwargs["persistent_workers"] = True
+    return kwargs
 
 
 class _BasePaperDataset(Dataset):
@@ -56,9 +72,9 @@ class ContrastDataset(_BasePaperDataset):
         )
 
     def __getitem__(self, index: int) -> dict[str, torch.Tensor]:
-        velocity = torch.from_numpy(np.array(self.velocity_delta[index], copy=True))[None]
-        pressure = torch.from_numpy(np.array(self.pressure_smooth[index], copy=True))
-        target = torch.from_numpy(np.array(self.pressure_delta[index], copy=True))
+        velocity = torch.from_numpy(self.velocity_delta[index])[None]
+        pressure = torch.from_numpy(self.pressure_smooth[index])
+        target = torch.from_numpy(self.pressure_delta[index])
         return {"x": torch.cat([velocity, pressure], dim=0), "y": target}
 
 
@@ -81,8 +97,8 @@ class Smooth2SmoothDataset(_BasePaperDataset):
         )
 
     def __getitem__(self, index: int) -> dict[str, torch.Tensor]:
-        x = torch.from_numpy(np.array(self.velocity_smooth[index], copy=True))[None]
-        y = torch.from_numpy(np.array(self.pressure_smooth[index], copy=True))
+        x = torch.from_numpy(self.velocity_smooth[index])[None]
+        y = torch.from_numpy(self.pressure_smooth[index])
         return {"x": x, "y": y}
 
 
@@ -105,8 +121,8 @@ class Sharp2SharpDataset(_BasePaperDataset):
         )
 
     def __getitem__(self, index: int) -> dict[str, torch.Tensor]:
-        x = torch.from_numpy(np.array(self.velocity_sharp[index], copy=True))[None]
-        y = torch.from_numpy(np.array(self.pressure_sharp[index], copy=True))
+        x = torch.from_numpy(self.velocity_sharp[index])[None]
+        y = torch.from_numpy(self.pressure_sharp[index])
         return {"x": x, "y": y}
 
 
@@ -136,9 +152,9 @@ class HybridDataset(_BasePaperDataset):
         )
 
     def __getitem__(self, index: int) -> dict[str, torch.Tensor]:
-        velocity_smooth = torch.from_numpy(np.array(self.velocity_smooth[index], copy=True))[None]
-        velocity_delta = torch.from_numpy(np.array(self.velocity_delta[index], copy=True))[None]
-        target = torch.from_numpy(np.array(self.pressure_sharp[index], copy=True))
+        velocity_smooth = torch.from_numpy(self.velocity_smooth[index])[None]
+        velocity_delta = torch.from_numpy(self.velocity_delta[index])[None]
+        target = torch.from_numpy(self.pressure_sharp[index])
         return {"x": torch.cat([velocity_smooth, velocity_delta], dim=0), "y": target}
 
 

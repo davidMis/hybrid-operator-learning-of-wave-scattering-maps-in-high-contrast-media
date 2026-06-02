@@ -22,7 +22,8 @@ import torch
 
 from helmholtz_hybrid.data import ScOTDatasetWrapper, load_task_dataset
 from helmholtz_hybrid.cli_config import apply_yaml_defaults, config_path_from_argv
-from helmholtz_hybrid.loss import complex_L2_norm
+from helmholtz_hybrid.evaluation import scot_predictions
+from helmholtz_hybrid.loss import relative_complex_l2
 from helmholtz_hybrid.reproducibility import configure_torch_reproducibility, write_run_manifest
 from helmholtz_hybrid.runtime import set_default_cache_dirs
 
@@ -318,6 +319,25 @@ def main() -> None:
     # scOT uses a HuggingFace-style Trainer. load_best_model_at_end selects the
     # best validation checkpoint by relative L2 error before save_model writes the
     # final reloadable config/weights in output_dir.
+    class RelativeL2MetricTrainer(Trainer):
+        """Trainer variant that accumulates scalar validation errors, not full fields."""
+
+        def prediction_step(self, model, inputs, prediction_loss_only, ignore_keys=None):
+            if prediction_loss_only or "labels" not in inputs:
+                return super().prediction_step(model, inputs, prediction_loss_only, ignore_keys)
+
+            inputs = self._prepare_inputs(inputs)
+            labels = inputs["labels"]
+            with torch.no_grad():
+                with self.compute_loss_context_manager():
+                    outputs = model(**inputs)
+
+            loss = outputs.loss.mean().detach() if getattr(outputs, "loss", None) is not None else None
+            predictions = scot_predictions(outputs)
+            rel_l2 = relative_complex_l2(predictions.detach(), labels.detach())
+            dummy_labels = torch.zeros_like(rel_l2)
+            return loss, rel_l2, dummy_labels
+
     train_config = TrainingArguments(
         output_dir=str(output_dir),
         overwrite_output_dir=True,
@@ -338,6 +358,7 @@ def main() -> None:
         save_total_limit=1,
         fp16=False,
         dataloader_num_workers=args.workers,
+        dataloader_pin_memory=device.type == "cuda",
         load_best_model_at_end=True,
         metric_for_best_model="rel_l2_err",
         seed=args.seed,
@@ -348,16 +369,11 @@ def main() -> None:
     )
 
     def compute_metrics(eval_preds):
-        # Validation metric mirrors the paper's relative complex L2 definition.
-        predictions, labels = unpack_eval_preds(eval_preds)
-        diff = labels - predictions
-        rel_l2_err = (
-            complex_L2_norm(torch.as_tensor(diff))
-            / (complex_L2_norm(torch.as_tensor(labels)) + 1e-8)
-        ).mean()
-        return {"rel_l2_err": float(rel_l2_err)}
+        # prediction_step returns one scalar relative complex L2 error per sample.
+        predictions, _ = unpack_eval_preds(eval_preds)
+        return {"rel_l2_err": float(np.mean(predictions))}
 
-    trainer = Trainer(
+    trainer = RelativeL2MetricTrainer(
         model=model,
         args=train_config,
         train_dataset=train_dataset,
