@@ -323,6 +323,23 @@ python scripts/plot_parameter_scaling.py \
 
 The metrics CSV must contain columns `panel,model,parameters,rel_l2`, where `panel` is one of `Smooth`, `Residual`, or `Sharp`.
 
+Training-time table:
+
+```bash
+python scripts/collect_training_times.py \
+  --data-root data/processed \
+  --dataset const_back \
+  --output results/const_back/paper/training_times.csv
+```
+
+The timing script uses all visible CUDA devices with one model per device. It
+discards the first epoch and averages the next three epochs for each standalone
+FNO/scOT model in the Figure 4 sweep. It also writes
+`results/const_back/paper/training_times_table.csv`, which has the compact table
+layout used in the manuscript. Hybrid training times are not listed as separate
+rows because a hybrid model is composed from a smooth-task FNO and a
+residual-task scOT at the same size.
+
 ## Hugging Face Artifact Release
 
 This section is for maintainers who need to update the Hugging Face artifact
