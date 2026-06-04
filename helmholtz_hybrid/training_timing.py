@@ -81,7 +81,7 @@ class TimingSettings:
     fno_config: Mapping[str, object]
     scot_config: Mapping[str, object]
     warmup_epochs: int = 1
-    timed_epochs: int = 3
+    timed_epochs: int = 1
     seed: int = 123
     max_batches: int | None = None
     batch_size_override: int | None = None

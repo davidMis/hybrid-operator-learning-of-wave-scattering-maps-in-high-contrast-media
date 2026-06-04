@@ -333,12 +333,32 @@ python scripts/collect_training_times.py \
 ```
 
 The timing script uses all visible CUDA devices with one model per device. It
-discards the first epoch and averages the next three epochs for each standalone
-FNO/scOT model in the Figure 4 sweep. It also writes
+discards the first epoch and records the next epoch for each standalone FNO/scOT
+model in the Figure 4 sweep. It also writes
 `results/const_back/paper/training_times_table.csv`, which has the compact table
 layout used in the manuscript. Hybrid training times are not listed as separate
 rows because a hybrid model is composed from a smooth-task FNO and a
 residual-task scOT at the same size.
+
+Inference-time table:
+
+```bash
+python scripts/collect_inference_times.py \
+  --data-root data/processed \
+  --dataset const_back \
+  --checkpoint-root outputs/checkpoints/const_back/paper \
+  --output results/const_back/paper/inference_times.csv
+```
+
+The inference timing script uses all visible CUDA devices with one model per
+device. It runs one warmup pass and records one timed pass over the test split
+for each FNO/scOT model in the Figure 4 sweep, plus the hybrid sharp
+reconstruction. By default, inference inputs are preloaded onto the target GPU
+before timing so the reported milliseconds per sample exclude disk, DataLoader,
+and host-to-device transfer time. It also writes
+`results/const_back/paper/inference_times_table.csv` with columns labeled by the
+sweep variable `n`, since hybrid parameter counts are the sum of two component
+models.
 
 ## Hugging Face Artifact Release
 
