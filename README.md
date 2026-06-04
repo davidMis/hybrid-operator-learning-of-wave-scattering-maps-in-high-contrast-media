@@ -340,6 +340,14 @@ layout used in the manuscript. Hybrid training times are not listed as separate
 rows because a hybrid model is composed from a smooth-task FNO and a
 residual-task scOT at the same size.
 
+To render those timings as a Figure 4-style scaling plot:
+
+```bash
+python scripts/plot_training_times.py \
+  --timing-csv results/const_back/paper/training_times.csv \
+  --output outputs/figures/const_back/paper/training_times.png
+```
+
 Inference-time table:
 
 ```bash
@@ -359,6 +367,14 @@ and host-to-device transfer time. It also writes
 `results/const_back/paper/inference_times_table.csv` with columns labeled by the
 sweep variable `n`, since hybrid parameter counts are the sum of two component
 models.
+
+To render those timings as a Figure 4-style scaling plot:
+
+```bash
+python scripts/plot_inference_times.py \
+  --timing-csv results/const_back/paper/inference_times.csv \
+  --output outputs/figures/const_back/paper/inference_times.png
+```
 
 ## Hugging Face Artifact Release
 
