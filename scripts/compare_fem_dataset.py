@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 # Overview:
-# Compare the recovered frequency-domain FEM Helmholtz solver against published
-# pressure samples. This script is a focused validation tool: it loads existing
-# velocity/pressure arrays, runs one FE solve per requested sample, aligns the
-# generated field by the best complex scalar, and writes metrics suitable for
-# iterative dataset-forensics runs on the server.
+# Compare the paper-scaled recovered FEM Helmholtz solver against published
+# pressure samples. This script loads existing velocity/pressure arrays, runs one
+# FE solve per requested sample, aligns the generated field by the best complex
+# scalar, and writes metrics suitable for iterative dataset-forensics runs.
 from __future__ import annotations
 
 import argparse
@@ -34,6 +33,7 @@ from helmholtz_hybrid.fem_helmholtz import (
     DEFAULT_FEM_SOURCE_SPREAD_GRID_CELLS,
     DEFAULT_FEM_SPILU_DROP_TOL,
     DEFAULT_FEM_SPILU_FILL_FACTOR,
+    DEFAULT_FEM_VELOCITY_SAMPLING,
     FEMConfigurationError,
     FEMHelmholtzSettings,
     FEMHelmholtzSolver,
@@ -99,7 +99,7 @@ def parse_args() -> argparse.Namespace:
     """Parse CLI options for one FEM comparison run."""
 
     parser = argparse.ArgumentParser(
-        description="Compare the recovered FEM Helmholtz solver against published pressure samples.",
+        description="Compare the paper-scaled recovered FEM Helmholtz solver against published pressure samples.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument(
@@ -201,7 +201,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--velocity-sampling",
         choices=("nearest", "bilinear", "legacy-mask128"),
-        default="nearest",
+        default=DEFAULT_FEM_VELOCITY_SAMPLING,
         help="How element-centroid velocities are sampled from the stored velocity grid.",
     )
     parser.add_argument(

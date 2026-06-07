@@ -1,9 +1,9 @@
 # Overview:
-# Reproduce the inherited frequency-domain finite-element Helmholtz solver used
-# by the legacy data-generation scripts. The implementation intentionally keeps
-# the same low-order triangular FEM discretization, Gaussian source, top
-# Dirichlet boundary, and Robin absorbing conditions on the other edges so it can
-# be compared directly against the published pressure arrays.
+# Reproduce the paper-scaled finite-element Helmholtz solver inferred from the
+# inherited data-generation scripts. The original scripts used an equivalent
+# 4 Hz, 10 km scale; these defaults use the paper-facing 40 Hz, 1 km scale while
+# keeping the same triangular FEM discretization, Gaussian source, top Dirichlet
+# boundary, and Robin absorbing conditions on the other edges.
 from __future__ import annotations
 
 import time
@@ -25,13 +25,18 @@ except ImportError as error:  # pragma: no cover - exercised only without option
 VelocitySampling = Literal["nearest", "bilinear", "legacy-mask128"]
 LinearSolver = Literal["bicgstab", "direct"]
 
-DEFAULT_FEM_DOMAIN_SIZE_M = 10_000.0
-DEFAULT_FEM_FREQUENCY_HZ = 4.0
+PAPER_FEM_DOMAIN_SIZE_M = 1_000.0
+PAPER_FEM_FREQUENCY_HZ = 40.0
+RECOVERED_LEGACY_DOMAIN_SIZE_M = 10_000.0
+RECOVERED_LEGACY_FREQUENCY_HZ = 4.0
+DEFAULT_FEM_DOMAIN_SIZE_M = PAPER_FEM_DOMAIN_SIZE_M
+DEFAULT_FEM_FREQUENCY_HZ = PAPER_FEM_FREQUENCY_HZ
 DEFAULT_FEM_SOURCE_ROWS_BELOW_TOP = 3.0
 DEFAULT_FEM_SOURCE_SPREAD_GRID_CELLS = 2.0
 DEFAULT_FEM_SOURCE_AMPLITUDE = 1.0
 DEFAULT_FEM_ABC_VELOCITY_M_S = 1_500.0
 DEFAULT_FEM_ABC_SCALE = 1.0
+DEFAULT_FEM_VELOCITY_SAMPLING: VelocitySampling = "legacy-mask128"
 DEFAULT_FEM_SPILU_DROP_TOL = 1e-3
 DEFAULT_FEM_SPILU_FILL_FACTOR = 20.0
 DEFAULT_FEM_BICGSTAB_RTOL = 1e-7
@@ -51,7 +56,7 @@ class FEMHelmholtzSettings:
     source_amplitude: float = DEFAULT_FEM_SOURCE_AMPLITUDE
     abc_velocity_m_s: float = DEFAULT_FEM_ABC_VELOCITY_M_S
     abc_scale: float = DEFAULT_FEM_ABC_SCALE
-    velocity_sampling: VelocitySampling = "nearest"
+    velocity_sampling: VelocitySampling = DEFAULT_FEM_VELOCITY_SAMPLING
     legacy_mask_shape: tuple[int, int] = (128, 128)
     linear_solver: LinearSolver = "bicgstab"
     spilu_drop_tol: float = DEFAULT_FEM_SPILU_DROP_TOL

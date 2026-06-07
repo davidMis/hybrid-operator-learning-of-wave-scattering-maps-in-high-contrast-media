@@ -90,17 +90,21 @@ If those variables are not already set, the timing script can set the Devito GPU
 ### Optional Recovered FEM Solver
 
 The inherited data-generation evidence points to a direct frequency-domain
-finite-element Helmholtz solve rather than Devito TDFD. Install the lightweight
-SciPy dependency when you want to compare against the published pressure arrays:
+finite-element Helmholtz solve rather than Devito TDFD. The recovered scripts
+used an equivalent `4 Hz`, `10000 m x 10000 m` scale, while this implementation
+uses the paper-facing `40 Hz`, `1000 m x 1000 m` scale by default. Install the
+lightweight SciPy dependency when you want to compare against the published
+pressure arrays:
 
 ```bash
 source .venv/bin/activate
 python -m pip install -e ".[fem]"
 ```
 
-The recovered defaults are `4 Hz`, a `10000 m x 10000 m` domain, a Gaussian
-source three grid rows below the top boundary, a Dirichlet top boundary, and
-Robin absorbing boundaries on the left, right, and bottom. To validate one
+The defaults are `40 Hz`, a `1000 m x 1000 m` domain, a Gaussian source three
+grid rows below the top boundary, a Dirichlet top boundary, Robin absorbing
+boundaries on the left, right, and bottom, and the recovered 128x128 salt-mask
+sampling convention for sharp constant-background data. To validate one
 published sharp-to-sharp sample after preparing data:
 
 ```bash
@@ -114,9 +118,10 @@ python scripts/compare_fem_dataset.py \
   --output-dir outputs/fem/dataset_match/const_back_sample0
 ```
 
-For `const_back` and `varied_salt`, add `--velocity-sampling legacy-mask128` to
-reconstruct the original 128x128 salt-mask sampling convention used inside the
-legacy sharp-pressure solve.
+With these paper-scaled defaults, a reproduced `const_back` sharp-pressure
+sample should match the published array with identity transform and unit complex
+scale. Pass `--domain-size-x-m 10000 --domain-size-y-m 10000 --frequency-hz 4`
+only when you intentionally want to inspect the recovered legacy scale.
 
 The reported `sample_generation_seconds` covers only FEM matrix assembly and
 linear solve time for the sample; it excludes dataset loading, plotting, and
