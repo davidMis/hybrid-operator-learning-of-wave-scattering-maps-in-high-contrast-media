@@ -67,6 +67,26 @@ python -m pip install --no-deps "scot @ git+https://github.com/camlab-ethz/posei
 
 Use Python 3.10 or 3.11. For the RTX PRO 6000 Blackwell Server Edition machines, use a CUDA 12.8-compatible PyTorch wheel such as `torch==2.7.0+cu128`. Do not install scOT with dependencies, because the upstream package metadata pins `torch==2.0.1`.
 
+### Optional Devito TDFD Solver
+
+The numerical-solver timing workflow uses Devito and the Devito seismic examples. Install these only on machines where you intend to run the time-domain finite-difference benchmark:
+
+```bash
+source .venv/bin/activate
+python -m pip install -e ".[tdfd]"
+```
+
+On `mutton2`, load or activate the NVIDIA HPC SDK so `nvc` is on `PATH`, then use the same OpenACC settings as the Devito prototype script:
+
+```bash
+export DEVITO_ARCH=nvc
+export DEVITO_LANGUAGE=openacc
+export DEVITO_PLATFORM=nvidiaX
+export CUDA_VISIBLE_DEVICES=0
+```
+
+If those variables are not already set, the timing script can set the Devito GPU defaults with `--backend gpu`. The script intentionally does not hard-code `CUDA_VISIBLE_DEVICES`.
+
 ## Quickstart
 
 ### Prepare directories (optional)
@@ -375,6 +395,46 @@ python scripts/plot_inference_times.py \
   --timing-csv results/const_back/paper/inference_times.csv \
   --output outputs/figures/const_back/paper/inference_times.png
 ```
+
+Numerical TDFD sample-generation time:
+
+```bash
+python scripts/time_tdfd_helmholtz.py \
+  --velocity data/processed/const_back/test/velocity_sharp.npy \
+  --sample-index 0 \
+  --backend gpu \
+  --output-pressure outputs/tdfd/const_back/test_pressure_sharp_000000.npy \
+  --metadata-output results/const_back/paper/tdfd_sample_time.json
+```
+
+This benchmark loads the selected velocity sample before timing, compiles the Devito operator before timing, and excludes optional pressure/metadata writes. The timed region is the sample generation itself: zeroing the wavefield and Fourier accumulators, running the time-domain acoustic propagation, and accumulating the 40 Hz complex pressure field. The output pressure uses the processed paper layout `[2, H, W]` with channel order `[real, imag]`, matching `pressure_sharp.npy`.
+
+The preprint specifies 256x256 velocity images, 40 Hz, a point source at the center of the free boundary, free-surface condition on that boundary, and absorbing conditions on the other three boundaries. The exact physical side lengths used by the original `hawen` dataset generator are not stored in this repo, so the Devito script exposes them as `--domain-size-m LX LY` and defaults to `1000 1000`. Set that option to the original `Lx,Ly` values if they differ.
+
+### Compare TDFD against the published data
+
+To recover the inherited numerical geometry, sweep candidate physical domain sizes against one or more published samples. The comparison script aligns each generated pressure field by the best complex scalar before scoring, so the primary `aligned_relative_l2` metric is not dominated by unknown source amplitude or phase conventions.
+
+Start near the current best guess `Lx=Ly=5000 m`:
+
+```bash
+python scripts/compare_tdfd_dataset.py \
+  --data-root data/processed \
+  --dataset const_back \
+  --split test \
+  --sample-indices 0 \
+  --lx-values 4500 5000 5500 \
+  --ly-values 4500 5000 5500 \
+  --solver-upsample-factor 3 \
+  --backend gpu \
+  --save-pressures \
+  --plot-best 6 \
+  --output-dir outputs/tdfd/dataset_match/lxy_5km_coarse
+```
+
+At 5 km, a direct 256x256 finite-difference solve has only about 1.9 grid points per 40 Hz minimum-velocity wavelength. `--solver-upsample-factor 3` solves on a 768x768 grid using nearest-neighbor velocity upsampling and mean-pools the generated pressure back to 256x256 for comparison. The long-form CSV is written incrementally to `tdfd_dataset_comparison.csv`, and the ranked summary is written to `tdfd_dataset_comparison_summary.csv`.
+
+After a coarse run, refine around the best-ranked `Lx,Ly` values. If the best rows consistently require a conjugation or flip transform, that indicates a Fourier-sign or boundary-orientation convention mismatch to fix in the solver rather than a geometry mismatch.
 
 ## Hugging Face Artifact Release
 
