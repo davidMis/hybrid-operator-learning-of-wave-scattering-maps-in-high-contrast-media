@@ -114,6 +114,10 @@ python scripts/compare_fem_dataset.py \
   --output-dir outputs/fem/dataset_match/const_back_sample0
 ```
 
+For `const_back` and `varied_salt`, add `--velocity-sampling legacy-mask128` to
+reconstruct the original 128x128 salt-mask sampling convention used inside the
+legacy sharp-pressure solve.
+
 The reported `sample_generation_seconds` covers only FEM matrix assembly and
 linear solve time for the sample; it excludes dataset loading, plotting, and
 file I/O.

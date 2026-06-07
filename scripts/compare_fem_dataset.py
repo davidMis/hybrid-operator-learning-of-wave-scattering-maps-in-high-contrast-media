@@ -64,6 +64,7 @@ FIELDNAMES = [
     "abc_velocity_m_s",
     "abc_scale",
     "velocity_sampling",
+    "legacy_mask_shape",
     "linear_solver",
     "solver_shape_y",
     "solver_shape_x",
@@ -199,9 +200,17 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--velocity-sampling",
-        choices=("nearest", "bilinear"),
+        choices=("nearest", "bilinear", "legacy-mask128"),
         default="nearest",
         help="How element-centroid velocities are sampled from the stored velocity grid.",
+    )
+    parser.add_argument(
+        "--legacy-mask-shape",
+        type=int,
+        nargs=2,
+        metavar=("NY", "NX"),
+        default=(128, 128),
+        help="Low-resolution salt mask shape used when --velocity-sampling legacy-mask128 is selected.",
     )
     parser.add_argument(
         "--linear-solver",
@@ -335,6 +344,7 @@ def make_settings(args: argparse.Namespace) -> FEMHelmholtzSettings:
         abc_velocity_m_s=args.abc_velocity_m_s,
         abc_scale=args.abc_scale,
         velocity_sampling=args.velocity_sampling,
+        legacy_mask_shape=tuple(args.legacy_mask_shape),
         linear_solver=args.linear_solver,
         spilu_drop_tol=args.spilu_drop_tol,
         spilu_fill_factor=args.spilu_fill_factor,
@@ -367,6 +377,7 @@ def write_metadata(
             "abc_velocity_m_s": settings.abc_velocity_m_s,
             "abc_scale": settings.abc_scale,
             "velocity_sampling": settings.velocity_sampling,
+            "legacy_mask_shape": list(settings.legacy_mask_shape),
             "linear_solver": settings.linear_solver,
         },
         "transforms": transforms,
@@ -440,6 +451,7 @@ def run_one_sample(
         "abc_velocity_m_s": settings.abc_velocity_m_s,
         "abc_scale": settings.abc_scale,
         "velocity_sampling": settings.velocity_sampling,
+        "legacy_mask_shape": "x".join(str(value) for value in settings.legacy_mask_shape),
         "linear_solver": settings.linear_solver,
         "pressure_path": "",
         "error": "",

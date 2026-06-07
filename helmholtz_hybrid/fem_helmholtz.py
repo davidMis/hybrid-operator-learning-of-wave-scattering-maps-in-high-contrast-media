@@ -22,7 +22,7 @@ except ImportError as error:  # pragma: no cover - exercised only without option
     ) from error
 
 
-VelocitySampling = Literal["nearest", "bilinear"]
+VelocitySampling = Literal["nearest", "bilinear", "legacy-mask128"]
 LinearSolver = Literal["bicgstab", "direct"]
 
 DEFAULT_FEM_DOMAIN_SIZE_M = 10_000.0
@@ -52,6 +52,7 @@ class FEMHelmholtzSettings:
     abc_velocity_m_s: float = DEFAULT_FEM_ABC_VELOCITY_M_S
     abc_scale: float = DEFAULT_FEM_ABC_SCALE
     velocity_sampling: VelocitySampling = "nearest"
+    legacy_mask_shape: tuple[int, int] = (128, 128)
     linear_solver: LinearSolver = "bicgstab"
     spilu_drop_tol: float = DEFAULT_FEM_SPILU_DROP_TOL
     spilu_fill_factor: float = DEFAULT_FEM_SPILU_FILL_FACTOR
@@ -162,6 +163,7 @@ class FEMHelmholtzSolver:
             source_x_m = 0.5 * self.settings.domain_size_x_m
         source_y_m = float(self.settings.source_rows_below_top) * self.dy
         source_sigma_m = float(self.settings.source_spread_grid_cells) * min(self.dx, self.dy)
+        velocity_at = make_velocity_sampler(velocity, self.settings, self.nx, self.ny)
 
         k_ref = self.settings.abc_scale * (self.omega / self.settings.abc_velocity_m_s)
 
@@ -180,7 +182,7 @@ class FEMHelmholtzSolver:
             )
             x_centroid = float(xy[:, 0].mean())
             y_centroid = float(xy[:, 1].mean())
-            v_centroid = sample_velocity(velocity, x_centroid, y_centroid, self.settings, self.nx, self.ny)
+            v_centroid = velocity_at(x_centroid, y_centroid)
             k2_elem = (self.omega / v_centroid) ** 2
 
             stiffness, mass, area = triangle_local_mats(xy, k2_elem)
@@ -282,10 +284,20 @@ class FEMHelmholtzSolver:
                 "source_x_m must lie inside the x-domain; "
                 f"got {self.settings.source_x_m} for Lx={self.settings.domain_size_x_m}."
             )
-        if self.settings.velocity_sampling not in ("nearest", "bilinear"):
+        if self.settings.velocity_sampling not in ("nearest", "bilinear", "legacy-mask128"):
             raise FEMConfigurationError(
-                f"Unknown velocity_sampling '{self.settings.velocity_sampling}'. Expected nearest or bilinear."
+                "Unknown velocity_sampling "
+                f"'{self.settings.velocity_sampling}'. Expected nearest, bilinear, or legacy-mask128."
             )
+        if self.settings.velocity_sampling == "legacy-mask128":
+            if len(self.settings.legacy_mask_shape) != 2:
+                raise FEMConfigurationError(
+                    f"legacy_mask_shape must have two entries; got {self.settings.legacy_mask_shape}."
+                )
+            if min(self.settings.legacy_mask_shape) < 2:
+                raise FEMConfigurationError(
+                    f"legacy_mask_shape entries must be at least 2; got {self.settings.legacy_mask_shape}."
+                )
         if self.settings.linear_solver not in ("bicgstab", "direct"):
             raise FEMConfigurationError(
                 f"Unknown linear_solver '{self.settings.linear_solver}'. Expected bicgstab or direct."
@@ -407,6 +419,62 @@ def sample_velocity(
     top = (1.0 - tx) * velocity[j0, i0] + tx * velocity[j0, i1]
     bottom = (1.0 - tx) * velocity[j1, i0] + tx * velocity[j1, i1]
     return float((1.0 - ty) * top + ty * bottom)
+
+
+def make_velocity_sampler(
+    velocity: np.ndarray,
+    settings: FEMHelmholtzSettings,
+    nx: int,
+    ny: int,
+):
+    """Return a centroid velocity sampler for the requested convention."""
+
+    if settings.velocity_sampling != "legacy-mask128":
+
+        def sampler(x_m: float, y_m: float) -> float:
+            return sample_velocity(velocity, x_m, y_m, settings, nx, ny)
+
+        return sampler
+
+    mask, background_velocity_m_s, salt_velocity_m_s = reconstruct_legacy_mask(velocity, settings, nx, ny)
+    mask_ny, mask_nx = mask.shape
+
+    def legacy_sampler(x_m: float, y_m: float) -> float:
+        x_index = np.clip(x_m / settings.domain_size_x_m * (mask_nx - 1), 0.0, mask_nx - 1.0)
+        y_index = np.clip(y_m / settings.domain_size_y_m * (mask_ny - 1), 0.0, mask_ny - 1.0)
+        i = int(np.rint(x_index))
+        j = int(np.rint(y_index))
+        return salt_velocity_m_s if mask[j, i] else background_velocity_m_s
+
+    return legacy_sampler
+
+
+def reconstruct_legacy_mask(
+    velocity: np.ndarray,
+    settings: FEMHelmholtzSettings,
+    nx: int,
+    ny: int,
+) -> tuple[np.ndarray, float, float]:
+    """Infer the legacy 128-grid salt mask from a rendered sharp velocity field.
+
+    The no-background legacy generators solved p_sharp by sampling a 128x128 salt
+    mask at element centroids, while the saved velocity was a 256x256 rendering
+    of that mask. Reconstructing the low-resolution mask recovers that callback
+    for constant-background sharp-to-sharp comparisons.
+    """
+
+    background_velocity_m_s = float(np.min(velocity))
+    salt_velocity_m_s = float(np.max(velocity))
+    if salt_velocity_m_s <= background_velocity_m_s:
+        raise ValueError("legacy-mask128 sampling requires at least two velocity levels.")
+    threshold = 0.5 * (background_velocity_m_s + salt_velocity_m_s)
+    rendered_mask = velocity > threshold
+
+    mask_ny, mask_nx = int(settings.legacy_mask_shape[0]), int(settings.legacy_mask_shape[1])
+    y_indices = np.rint(np.linspace(0.0, ny - 1, mask_ny)).astype(int)
+    x_indices = np.rint(np.linspace(0.0, nx - 1, mask_nx)).astype(int)
+    mask = rendered_mask[np.ix_(y_indices, x_indices)]
+    return mask, background_velocity_m_s, salt_velocity_m_s
 
 
 def gaussian_source(
