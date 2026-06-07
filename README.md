@@ -127,6 +127,25 @@ The reported `sample_generation_seconds` covers only FEM matrix assembly and
 linear solve time for the sample; it excludes dataset loading, plotting, and
 file I/O.
 
+To time the recovered FEM solver over 10 sharp-to-sharp samples, preload the
+velocity fields and construct the solver before the timed region:
+
+```bash
+python scripts/time_fem_helmholtz.py \
+  --data-root data/processed \
+  --dataset const_back \
+  --split test \
+  --sample-start-index 0 \
+  --sample-count 10 \
+  --output-json results/fem/const_back_test_10samples.json \
+  --output-csv results/fem/const_back_test_10samples.csv
+```
+
+The timing JSON reports `mean_sample_generation_seconds` for matrix assembly
+plus sparse solve, and `mean_linear_solve_seconds` for the sparse linear solve
+alone. Dataset loading, solver construction, plotting, and pressure writes are
+excluded.
+
 ## Quickstart
 
 ### Prepare directories (optional)
