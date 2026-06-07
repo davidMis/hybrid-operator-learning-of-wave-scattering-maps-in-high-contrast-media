@@ -87,6 +87,37 @@ export CUDA_VISIBLE_DEVICES=0
 
 If those variables are not already set, the timing script can set the Devito GPU defaults with `--backend gpu`. The script intentionally does not hard-code `CUDA_VISIBLE_DEVICES`.
 
+### Optional Recovered FEM Solver
+
+The inherited data-generation evidence points to a direct frequency-domain
+finite-element Helmholtz solve rather than Devito TDFD. Install the lightweight
+SciPy dependency when you want to compare against the published pressure arrays:
+
+```bash
+source .venv/bin/activate
+python -m pip install -e ".[fem]"
+```
+
+The recovered defaults are `4 Hz`, a `10000 m x 10000 m` domain, a Gaussian
+source three grid rows below the top boundary, a Dirichlet top boundary, and
+Robin absorbing boundaries on the left, right, and bottom. To validate one
+published sharp-to-sharp sample after preparing data:
+
+```bash
+python scripts/compare_fem_dataset.py \
+  --data-root data/processed \
+  --dataset const_back \
+  --split test \
+  --sample-indices 0 \
+  --save-pressures \
+  --plot \
+  --output-dir outputs/fem/dataset_match/const_back_sample0
+```
+
+The reported `sample_generation_seconds` covers only FEM matrix assembly and
+linear solve time for the sample; it excludes dataset loading, plotting, and
+file I/O.
+
 ## Quickstart
 
 ### Prepare directories (optional)

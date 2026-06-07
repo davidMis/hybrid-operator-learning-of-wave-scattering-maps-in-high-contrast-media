@@ -24,6 +24,9 @@ dependencies = [
 
 [project.optional-dependencies]
 logging = ["wandb==0.14.2"]
+fem = [
+    "scipy>=1.10",
+]
 tdfd = [
     "devito>=4.8.21,<4.9",
     "devito-examples==1.0",
