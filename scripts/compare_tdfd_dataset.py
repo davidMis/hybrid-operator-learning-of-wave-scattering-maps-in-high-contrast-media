@@ -181,14 +181,38 @@ def parse_args() -> argparse.Namespace:
         type=float,
         nargs="+",
         default=None,
-        help="Optional source x-coordinates to sweep. Omit to use the domain center.",
+        help="Optional absolute source x-coordinates to sweep in meters.",
+    )
+    parser.add_argument(
+        "--source-x-fractions",
+        type=float,
+        nargs="+",
+        default=None,
+        help="Optional source x-coordinates as fractions of Lx. Defaults to 0.5 when no x source option is set.",
     )
     parser.add_argument(
         "--source-y-values-m",
         type=float,
         nargs="+",
         default=None,
-        help="Optional source y-coordinates to sweep. Omit to use one solver grid cell below the free surface.",
+        help="Optional absolute source y-coordinates to sweep in meters.",
+    )
+    parser.add_argument(
+        "--source-y-fractions",
+        type=float,
+        nargs="+",
+        default=None,
+        help="Optional source y-coordinates as fractions of Ly.",
+    )
+    parser.add_argument(
+        "--source-y-grid-offsets",
+        type=float,
+        nargs="+",
+        default=None,
+        help=(
+            "Optional source y-coordinates as multiples of the solver-grid dy below "
+            "the free surface. Defaults to 1 when no y source option is set."
+        ),
     )
     parser.add_argument(
         "--solver-upsample-factor",
@@ -427,24 +451,70 @@ def build_candidates(args: argparse.Namespace) -> list[dict[str, float | None]]:
     """Return all geometry/source candidates requested by the CLI."""
 
     ly_values = args.ly_values if args.ly_values is not None else args.lx_values
-    source_x_values = args.source_x_values_m if args.source_x_values_m is not None else [None]
-    source_y_values = args.source_y_values_m if args.source_y_values_m is not None else [None]
+    source_x_specs = source_position_specs(
+        values_m=args.source_x_values_m,
+        fractions=args.source_x_fractions,
+        grid_offsets=None,
+        default=("fraction", 0.5),
+        axis="x",
+    )
+    source_y_specs = source_position_specs(
+        values_m=args.source_y_values_m,
+        fractions=args.source_y_fractions,
+        grid_offsets=args.source_y_grid_offsets,
+        default=("grid_offset", 1.0),
+        axis="y",
+    )
     candidates = []
     for lx in args.lx_values:
         for ly in ly_values:
-            for source_x in source_x_values:
-                for source_y in source_y_values:
+            for source_x_mode, source_x_value in source_x_specs:
+                for source_y_mode, source_y_value in source_y_specs:
                     candidates.append(
                         {
                             "domain_size_x_m": float(lx),
                             "domain_size_y_m": float(ly),
-                            "source_x_m": None if source_x is None else float(source_x),
-                            "source_y_m": None if source_y is None else float(source_y),
+                            "source_x_mode": source_x_mode,
+                            "source_x_value": float(source_x_value),
+                            "source_y_mode": source_y_mode,
+                            "source_y_value": float(source_y_value),
                         }
                     )
     if not candidates:
         raise ValueError("No candidates were requested.")
     return candidates
+
+
+def source_position_specs(
+    *,
+    values_m: list[float] | None,
+    fractions: list[float] | None,
+    grid_offsets: list[float] | None,
+    default: tuple[str, float],
+    axis: str,
+) -> list[tuple[str, float]]:
+    """Return source position specifications for one axis."""
+
+    requested = [values_m is not None, fractions is not None, grid_offsets is not None]
+    if sum(requested) > 1:
+        raise ValueError(
+            f"Choose only one source-{axis} mode: absolute meters, fractions, or grid offsets."
+        )
+    if values_m is not None:
+        return [("meters", float(value)) for value in values_m]
+    if fractions is not None:
+        for value in fractions:
+            if not 0.0 <= value <= 1.0:
+                raise ValueError(f"source-{axis} fractions must be in [0, 1], got {value}.")
+        return [("fraction", float(value)) for value in fractions]
+    if grid_offsets is not None:
+        if axis != "y":
+            raise ValueError("Grid-offset source coordinates are only supported for the y axis.")
+        for value in grid_offsets:
+            if value < 0.0:
+                raise ValueError(f"source-y grid offsets must be non-negative, got {value}.")
+        return [("grid_offset", float(value)) for value in grid_offsets]
+    return [default]
 
 
 def write_metadata(
@@ -549,8 +619,8 @@ def run_one_candidate(
         "sample_index": sample_index,
         "domain_size_x_m": float(candidate["domain_size_x_m"]),
         "domain_size_y_m": float(candidate["domain_size_y_m"]),
-        "requested_source_x_m": candidate["source_x_m"],
-        "requested_source_y_m": candidate["source_y_m"],
+        "requested_source_x_m": "",
+        "requested_source_y_m": "",
         "solver_upsample_factor": args.solver_upsample_factor,
         "target_shape_y": target.shape[0],
         "target_shape_x": target.shape[1],
@@ -563,7 +633,9 @@ def run_one_candidate(
     }
     try:
         solver_velocity = upsample_velocity_nearest(velocity, args.solver_upsample_factor)
-        settings = make_settings(args, candidate)
+        settings = make_settings(args, candidate, solver_velocity.shape)
+        base_row["requested_source_x_m"] = settings.source_x_m
+        base_row["requested_source_y_m"] = settings.source_y_m
         build_start = time.perf_counter()
         solver = TDFDHelmholtzSolver(solver_velocity, settings)
         build_seconds = time.perf_counter() - build_start
@@ -588,8 +660,14 @@ def run_one_candidate(
             crop=tuple(args.compare_crop_cells),
         )
         pressure_path = ""
+        resolved_candidate = {
+            "domain_size_x_m": candidate["domain_size_x_m"],
+            "domain_size_y_m": candidate["domain_size_y_m"],
+            "source_x_m": settings.source_x_m,
+            "source_y_m": settings.source_y_m,
+        }
         if args.save_pressures:
-            pressure_path = str(save_candidate_pressure(paths, predicted, sample_index, candidate, args))
+            pressure_path = str(save_candidate_pressure(paths, predicted, sample_index, resolved_candidate, args))
 
         diagnostics = sample.diagnostics
         return {
@@ -615,9 +693,27 @@ def run_one_candidate(
         }
 
 
-def make_settings(args: argparse.Namespace, candidate: dict[str, float | None]) -> TDFDHelmholtzSettings:
+def make_settings(
+    args: argparse.Namespace,
+    candidate: dict[str, float | None],
+    solver_shape: tuple[int, int],
+) -> TDFDHelmholtzSettings:
     """Build solver settings for one candidate."""
 
+    domain_size_x_m = float(candidate["domain_size_x_m"])
+    domain_size_y_m = float(candidate["domain_size_y_m"])
+    source_x_m = resolve_source_coordinate(
+        mode=str(candidate["source_x_mode"]),
+        value=float(candidate["source_x_value"]),
+        domain_size_m=domain_size_x_m,
+        spacing_m=domain_size_x_m / float(solver_shape[1] - 1),
+    )
+    source_y_m = resolve_source_coordinate(
+        mode=str(candidate["source_y_mode"]),
+        value=float(candidate["source_y_value"]),
+        domain_size_m=domain_size_y_m,
+        spacing_m=domain_size_y_m / float(solver_shape[0] - 1),
+    )
     runtime = DevitoRuntimeSettings(
         backend=args.backend,
         devito_arch=args.devito_arch,
@@ -628,10 +724,10 @@ def make_settings(args: argparse.Namespace, candidate: dict[str, float | None]) 
     )
     return TDFDHelmholtzSettings(
         frequency_hz=args.frequency_hz,
-        domain_size_x_m=float(candidate["domain_size_x_m"]),
-        domain_size_y_m=float(candidate["domain_size_y_m"]),
-        source_x_m=candidate["source_x_m"],
-        source_y_m=candidate["source_y_m"],
+        domain_size_x_m=domain_size_x_m,
+        domain_size_y_m=domain_size_y_m,
+        source_x_m=source_x_m,
+        source_y_m=source_y_m,
         start_time_ms=args.start_time_ms,
         end_time_ms=args.end_time_ms,
         dt_ms=args.dt_ms,
@@ -649,6 +745,18 @@ def make_settings(args: argparse.Namespace, candidate: dict[str, float | None]) 
         chunk_steps=args.chunk_steps,
         runtime=runtime,
     )
+
+
+def resolve_source_coordinate(*, mode: str, value: float, domain_size_m: float, spacing_m: float) -> float:
+    """Resolve one source-coordinate specification to meters."""
+
+    if mode == "meters":
+        return value
+    if mode == "fraction":
+        return value * domain_size_m
+    if mode == "grid_offset":
+        return value * spacing_m
+    raise ValueError(f"Unknown source coordinate mode '{mode}'.")
 
 
 def save_candidate_pressure(
