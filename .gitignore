@@ -14,3 +14,4 @@ checkpoints/
 fno_runs/
 logs/
 wandb/
+tmp/

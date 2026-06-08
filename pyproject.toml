@@ -24,6 +24,9 @@ dependencies = [
 
 [project.optional-dependencies]
 logging = ["wandb==0.14.2"]
+fem = [
+    "scipy>=1.10",
+]
 
 [tool.setuptools.packages.find]
 include = ["helmholtz_hybrid*"]
