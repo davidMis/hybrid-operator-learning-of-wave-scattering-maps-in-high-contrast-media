@@ -225,6 +225,32 @@ manuscript-ready `hybrid_smooth_source_comparison_table.tex` next to it. Use
 `--dry-run` to validate all data and checkpoint paths without loading models,
 or `--max-samples 64 --sizes 2` for a quick GPU smoke test.
 
+### Fine-tune the hybrid end to end
+
+The released smooth FNO and capacity-matched residual scOT can also be jointly
+fine-tuned against the sharp-pressure target. This makes gradients from the
+full reconstruction flow through both components. The ten-epoch exploratory
+configuration uses an effective batch size of 32:
+
+```bash
+python scripts/finetune_hybrid.py \
+  --config configs/hybrid_finetune_10epoch.yaml \
+  --data-root data/processed \
+  --dataset const_back \
+  --checkpoint-root outputs/checkpoints/const_back/paper \
+  --size 2 \
+  --device cuda:0 \
+  --wandb-project hybrid-architectures \
+  --wandb-group hybrid-end-to-end-10epoch
+```
+
+The script first records the pretrained hybrid's validation error as epoch 0,
+then validates after every joint training epoch. It writes append-only
+`metrics.jsonl`, a run manifest, completion metadata, and the best matched pair
+under `<run>/best/fno` and `<run>/best/scot`. Those two checkpoint directories
+can be passed directly to `scripts/evaluate.py`. For a quick functional check,
+add `--max-train-samples 64 --max-validation-samples 64 --epochs 1 --warmup-epochs 0`.
+
 
 ## Data Layout
 

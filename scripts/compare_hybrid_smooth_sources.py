@@ -10,7 +10,6 @@ import argparse
 import sys
 from pathlib import Path
 
-import torch
 from tqdm.auto import tqdm
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -27,6 +26,7 @@ from helmholtz_hybrid.hybrid_comparison import (
     scot_contrast_checkpoint,
     write_comparison_outputs,
 )
+from helmholtz_hybrid.runtime import resolve_torch_device
 
 
 def parse_args() -> argparse.Namespace:
@@ -135,32 +135,6 @@ def parse_args() -> argparse.Namespace:
     return args
 
 
-def resolve_device(requested: str) -> torch.device:
-    """Resolve the requested inference device and validate CUDA availability."""
-
-    if requested == "auto":
-        if not torch.cuda.is_available():
-            raise RuntimeError(
-                "No CUDA device is visible. Run this command on a GPU node or pass "
-                "--device cpu only for a small functional smoke test."
-            )
-        requested = "cuda"
-    device = torch.device(requested)
-    if device.type == "cuda":
-        if not torch.cuda.is_available():
-            raise RuntimeError(
-                f"Requested {device}, but PyTorch reports that CUDA is unavailable."
-            )
-        if device.index is not None and device.index >= torch.cuda.device_count():
-            raise RuntimeError(
-                f"Requested {device}, but only {torch.cuda.device_count()} CUDA device(s) are visible."
-            )
-        # torch.cuda.set_device requires a concrete index even though torch.device
-        # accepts the generic "cuda" device selected by --device auto.
-        torch.cuda.set_device(0 if device.index is None else device.index)
-    return device
-
-
 def validate_args(args: argparse.Namespace) -> None:
     """Raise actionable errors for invalid options or missing input artifacts."""
 
@@ -216,7 +190,7 @@ def run(args: argparse.Namespace) -> int:
         print("Input validation passed; no models were loaded.")
         return 0
 
-    device = resolve_device(args.device)
+    device = resolve_torch_device(args.device, require_cuda_for_auto=True)
     sample_description = (
         "full split" if args.max_samples is None else f"first {args.max_samples} samples"
     )

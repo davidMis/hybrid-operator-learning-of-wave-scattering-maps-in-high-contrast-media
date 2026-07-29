@@ -1,0 +1,14 @@
+# Ten-epoch exploratory protocol for end-to-end fine-tuning of a released
+# capacity-matched FNO/scOT pair. A physical batch of 8 with four-step gradient
+# accumulation preserves an effective batch size of 32 while reducing GPU use.
+batch_size: 8
+gradient_accumulation_steps: 4
+epochs: 10
+warmup_epochs: 1
+learning_rate: 1.0e-4
+weight_decay: 1.0e-4
+eta_min: 1.0e-6
+max_grad_norm: 1.0
+workers: 4
+deterministic: true
+allow_tf32: false
