@@ -158,6 +158,48 @@ class HybridDataset(_BasePaperDataset):
         return {"x": torch.cat([velocity_smooth, velocity_delta], dim=0), "y": target}
 
 
+class HybridSmoothSourceDataset(_BasePaperDataset):
+    """Hybrid ablation input with exact smooth pressure and full-pressure target."""
+
+    input_channels = 2
+
+    def __init__(
+        self,
+        velocity_smooth: np.ndarray,
+        velocity_delta: np.ndarray,
+        pressure_smooth: np.ndarray,
+        pressure_sharp: np.ndarray,
+    ) -> None:
+        self.velocity_smooth = velocity_smooth
+        self.velocity_delta = velocity_delta
+        self.pressure_smooth = pressure_smooth
+        self.pressure_sharp = pressure_sharp
+        self.length = int(velocity_smooth.shape[0])
+        self.resolution = int(velocity_smooth.shape[-1])
+
+    @staticmethod
+    def load(input_directory: str | Path) -> "HybridSmoothSourceDataset":
+        """Load arrays needed to compare exact and FNO-predicted smooth pressure."""
+
+        return HybridSmoothSourceDataset(
+            velocity_smooth=_load_array(input_directory, "velocity_smooth.npy"),
+            velocity_delta=_load_array(input_directory, "velocity_delta.npy"),
+            pressure_smooth=_load_array(input_directory, "pressure_smooth.npy"),
+            pressure_sharp=_load_array(input_directory, "pressure_sharp.npy"),
+        )
+
+    def __getitem__(self, index: int) -> dict[str, torch.Tensor]:
+        velocity_smooth = torch.from_numpy(self.velocity_smooth[index])[None]
+        velocity_delta = torch.from_numpy(self.velocity_delta[index])[None]
+        pressure_smooth = torch.from_numpy(self.pressure_smooth[index])
+        pressure_sharp = torch.from_numpy(self.pressure_sharp[index])
+        return {
+            "x": torch.cat([velocity_smooth, velocity_delta], dim=0),
+            "pressure_smooth": pressure_smooth,
+            "y": pressure_sharp,
+        }
+
+
 DATASET_BY_TASK: dict[str, Type[_BasePaperDataset]] = {
     "smooth2smooth": Smooth2SmoothDataset,
     "contrast": ContrastDataset,

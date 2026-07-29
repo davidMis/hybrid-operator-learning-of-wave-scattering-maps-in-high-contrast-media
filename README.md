@@ -204,6 +204,28 @@ Checkpoint evaluation is scheduled across all visible CUDA devices.
 `MODEL_ACTION=evaluate` skips training and reads checkpoints from
 `outputs/checkpoints/<dataset>/<model-version>/`.
 
+### Compare exact and FNO-predicted smooth pressure
+
+To reproduce the hybrid smooth-source ablation, compare the same trained
+residual scOT with either the exact smooth pressure or the output of the
+capacity-matched smooth-task FNO. Both reconstructions are evaluated against
+the same sharp-pressure target:
+
+```bash
+python scripts/compare_hybrid_smooth_sources.py \
+  --data-root data/processed \
+  --dataset const_back \
+  --checkpoint-root outputs/checkpoints/const_back/paper \
+  --output results/const_back/paper/hybrid_smooth_source_comparison.csv
+```
+
+The command evaluates the five paper capacities `n=2,4,6,8,10` on the
+5,000-sample test split. It writes the requested wide-form CSV and a
+manuscript-ready `hybrid_smooth_source_comparison_table.tex` next to it. Use
+`--dry-run` to validate all data and checkpoint paths without loading models,
+or `--max-samples 64 --sizes 2` for a quick GPU smoke test.
+
+
 ## Data Layout
 
 Large arrays and trained checkpoints are expected under the repository-local
