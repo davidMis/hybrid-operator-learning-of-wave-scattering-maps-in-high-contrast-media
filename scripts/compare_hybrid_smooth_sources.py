@@ -155,7 +155,9 @@ def resolve_device(requested: str) -> torch.device:
             raise RuntimeError(
                 f"Requested {device}, but only {torch.cuda.device_count()} CUDA device(s) are visible."
             )
-        torch.cuda.set_device(device)
+        # torch.cuda.set_device requires a concrete index even though torch.device
+        # accepts the generic "cuda" device selected by --device auto.
+        torch.cuda.set_device(0 if device.index is None else device.index)
     return device
 
 
