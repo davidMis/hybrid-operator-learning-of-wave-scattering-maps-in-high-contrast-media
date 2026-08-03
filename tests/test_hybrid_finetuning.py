@@ -1,5 +1,5 @@
 # Overview:
-# Exercise the differentiable hybrid composition, joint epoch update, streamed
+# Exercise the frozen-FNO hybrid composition, scOT-only epoch update, streamed
 # validation metric, and paired checkpoint layout without loading neuralop or
 # scOT checkpoints.
 from __future__ import annotations
@@ -12,7 +12,7 @@ from torch import nn
 from torch.utils.data import DataLoader, Dataset
 
 from helmholtz_hybrid.hybrid_finetuning import (
-    EndToEndHybridOperator,
+    FrozenFNOHybridOperator,
     evaluate_hybrid_epoch,
     save_hybrid_checkpoint,
     train_hybrid_epoch,
@@ -70,26 +70,30 @@ class TinyContrast(nn.Module):
         torch.save(self.state_dict(), directory / "pytorch_model.bin")
 
 
-def make_tiny_model() -> EndToEndHybridOperator:
+def make_tiny_model() -> FrozenFNOHybridOperator:
     torch.manual_seed(11)
-    return EndToEndHybridOperator(TinySmooth(), TinyContrast())
+    return FrozenFNOHybridOperator(TinySmooth(), TinyContrast())
 
 
-def test_end_to_end_forward_backpropagates_through_both_components() -> None:
+def test_forward_freezes_fno_and_backpropagates_only_through_scot() -> None:
     model = make_tiny_model()
+    model.train()
     sample = TinyHybridDataset(samples=2)[0]
     prediction = model(sample["x"].unsqueeze(0))
     prediction.square().mean().backward()
 
     assert prediction.shape == (1, 2, 4, 4)
-    assert model.smooth_model.projection.weight.grad is not None
+    assert not model.smooth_model.training
+    assert model.contrast_model.training
+    assert not model.smooth_model.projection.weight.requires_grad
+    assert model.smooth_model.projection.weight.grad is None
     assert model.contrast_model.projection.weight.grad is not None
 
 
 def test_training_and_validation_epoch_return_finite_sample_means() -> None:
     model = make_tiny_model()
     loader = DataLoader(TinyHybridDataset(), batch_size=2, shuffle=False)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-2)
+    optimizer = torch.optim.AdamW(model.contrast_model.parameters(), lr=1e-2)
     initial_smooth = model.smooth_model.projection.weight.detach().clone()
     initial_contrast = model.contrast_model.projection.weight.detach().clone()
 
@@ -110,7 +114,7 @@ def test_training_and_validation_epoch_return_finite_sample_means() -> None:
 
     assert torch.isfinite(torch.tensor(train_error))
     assert torch.isfinite(torch.tensor(validation_error))
-    assert not torch.equal(initial_smooth, model.smooth_model.projection.weight)
+    assert torch.equal(initial_smooth, model.smooth_model.projection.weight)
     assert not torch.equal(initial_contrast, model.contrast_model.projection.weight)
 
 
@@ -128,7 +132,7 @@ def test_checkpoint_writer_saves_reloadable_pair_and_metadata(tmp_path: Path) ->
     assert (tmp_path / "fno" / "best_model_metadata.pkl").is_file()
     assert (tmp_path / "scot" / "config.json").is_file()
     assert (tmp_path / "scot" / "pytorch_model.bin").is_file()
-    metadata = json.loads((tmp_path / "best_checkpoint.json").read_text())
-    assert metadata["best_epoch"] == 3
+    metadata = json.loads((tmp_path / "checkpoint.json").read_text())
+    assert metadata["epoch"] == 3
     assert metadata["validation_mean_relative_l2"] == 0.125
     assert metadata["source"] == "test"

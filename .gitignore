@@ -6,6 +6,7 @@ __pycache__/
 .venv/
 .env
 .hf_staging/
+.vs_code/
 
 data/
 outputs/

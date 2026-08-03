@@ -1,8 +1,7 @@
 # Overview:
-# Compose pretrained smooth-pressure FNO and residual-pressure scOT models for
-# end-to-end optimization against sharp pressure. This module owns the reusable
-# forward pass, epoch loops, learning-rate schedule, metrics log, and paired
-# native-format checkpoint writer used by scripts/finetune_hybrid.py.
+# Compose a frozen smooth-pressure FNO with a trainable residual-pressure scOT.
+# This module owns the reusable forward pass, epoch loops, metrics log, and
+# paired native-format checkpoint writer used by scripts/finetune_hybrid.py.
 from __future__ import annotations
 
 import json
@@ -30,13 +29,22 @@ class EpochMetrics:
     learning_rate: float
 
 
-class EndToEndHybridOperator(nn.Module):
-    """Differentiable FNO/scOT composition that predicts full sharp pressure."""
+class FrozenFNOHybridOperator(nn.Module):
+    """Hybrid operator that adapts scOT while keeping its FNO input fixed."""
 
     def __init__(self, smooth_model: nn.Module, contrast_model: nn.Module) -> None:
         super().__init__()
         self.smooth_model = smooth_model
         self.contrast_model = contrast_model
+        self.smooth_model.requires_grad_(False)
+        self.smooth_model.eval()
+
+    def train(self, mode: bool = True) -> "FrozenFNOHybridOperator":
+        """Set scOT's mode while keeping the frozen FNO in evaluation mode."""
+
+        super().train(mode)
+        self.smooth_model.eval()
+        return self
 
     def forward(self, inputs: torch.Tensor) -> torch.Tensor:
         """Map ``[v_smooth, v_delta]`` to ``p_smooth + p_delta``."""
@@ -48,53 +56,18 @@ class EndToEndHybridOperator(nn.Module):
             )
         velocity_smooth = inputs[:, 0:1]
         velocity_delta = inputs[:, 1:2]
-        pressure_smooth = self.smooth_model(velocity_smooth)
+        # The FNO output is an input feature for scOT, not part of the trainable
+        # graph. no_grad both enforces that contract and avoids storing FNO
+        # activations during the scOT update.
+        with torch.no_grad():
+            pressure_smooth = self.smooth_model(velocity_smooth)
         contrast_input = torch.cat([velocity_delta, pressure_smooth], dim=1)
         pressure_delta = scot_predictions(self.contrast_model(contrast_input))
         return pressure_smooth + pressure_delta
 
 
-def make_epoch_scheduler(
-    optimizer: torch.optim.Optimizer,
-    *,
-    epochs: int,
-    warmup_epochs: int,
-    eta_min: float,
-) -> torch.optim.lr_scheduler.LRScheduler:
-    """Build the paper-style linear-warmup then cosine-decay schedule."""
-
-    if epochs < 1:
-        raise ValueError(f"Epoch count must be positive; got {epochs}.")
-    if warmup_epochs < 0 or warmup_epochs >= epochs:
-        raise ValueError(
-            f"Warmup epochs must satisfy 0 <= warmup < epochs; got {warmup_epochs} and {epochs}."
-        )
-    if warmup_epochs == 0:
-        return torch.optim.lr_scheduler.CosineAnnealingLR(
-            optimizer,
-            T_max=epochs,
-            eta_min=eta_min,
-        )
-
-    warmup = torch.optim.lr_scheduler.LinearLR(
-        optimizer,
-        start_factor=0.1,
-        total_iters=warmup_epochs,
-    )
-    cosine = torch.optim.lr_scheduler.CosineAnnealingLR(
-        optimizer,
-        T_max=max(epochs - warmup_epochs, 1),
-        eta_min=eta_min,
-    )
-    return torch.optim.lr_scheduler.SequentialLR(
-        optimizer,
-        schedulers=[warmup, cosine],
-        milestones=[warmup_epochs],
-    )
-
-
 def train_hybrid_epoch(
-    model: EndToEndHybridOperator,
+    model: FrozenFNOHybridOperator,
     loader: DataLoader,
     optimizer: torch.optim.Optimizer,
     device: torch.device,
@@ -104,7 +77,7 @@ def train_hybrid_epoch(
     max_grad_norm: float = 1.0,
     progress_position: int = 1,
 ) -> float:
-    """Train both component models for one epoch and return sample-mean error."""
+    """Train only the residual scOT for one epoch and return sample-mean error."""
 
     if gradient_accumulation_steps < 1:
         raise ValueError(
@@ -113,6 +86,12 @@ def train_hybrid_epoch(
         )
     model.train()
     optimizer.zero_grad(set_to_none=True)
+    optimizer_parameters = [
+        parameter
+        for group in optimizer.param_groups
+        for parameter in group["params"]
+        if parameter.requires_grad
+    ]
     error_sum = 0.0
     sample_count = 0
     total_batches = len(loader)
@@ -146,11 +125,11 @@ def train_hybrid_epoch(
             accumulated_batches = (batch_index - 1) % gradient_accumulation_steps + 1
             if accumulated_batches < gradient_accumulation_steps:
                 scale = gradient_accumulation_steps / accumulated_batches
-                for parameter in model.parameters():
+                for parameter in optimizer_parameters:
                     if parameter.grad is not None:
                         parameter.grad.mul_(scale)
             if max_grad_norm > 0:
-                nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
+                nn.utils.clip_grad_norm_(optimizer_parameters, max_grad_norm)
             optimizer.step()
             optimizer.zero_grad(set_to_none=True)
 
@@ -166,7 +145,7 @@ def train_hybrid_epoch(
 
 @torch.no_grad()
 def evaluate_hybrid_epoch(
-    model: EndToEndHybridOperator,
+    model: FrozenFNOHybridOperator,
     loader: DataLoader,
     device: torch.device,
     *,
@@ -211,7 +190,7 @@ def append_epoch_metrics(path: str | Path, metrics: EpochMetrics) -> None:
 
 
 def save_hybrid_checkpoint(
-    model: EndToEndHybridOperator,
+    model: FrozenFNOHybridOperator,
     output_dir: str | Path,
     *,
     epoch: int,
@@ -234,13 +213,13 @@ def save_hybrid_checkpoint(
     model.smooth_model.save_checkpoint(fno_dir, "best_model")
     model.contrast_model.save_pretrained(scot_dir)
     metadata: dict[str, Any] = {
-        "best_epoch": int(epoch),
+        "epoch": int(epoch),
         "validation_mean_relative_l2": float(validation_mean_relative_l2),
         "fno_checkpoint": "fno",
         "scot_checkpoint": "scot",
     }
     if extra_metadata:
         metadata.update(extra_metadata)
-    (output_dir / "best_checkpoint.json").write_text(
+    (output_dir / "checkpoint.json").write_text(
         json.dumps(metadata, indent=2, sort_keys=True) + "\n"
     )

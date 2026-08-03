@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 # Overview:
-# Fine-tune a capacity-matched smooth FNO and residual scOT jointly against
-# sharp-pressure targets. The script starts from released component checkpoints,
-# records the epoch-0 baseline, validates every epoch, logs optionally to W&B,
-# and saves the best matched pair in the native formats used by evaluate.py.
+# Fine-tune a residual scOT for one epoch on pressure supplied by a frozen,
+# capacity-matched smooth FNO. The script records the pretrained baseline, uses
+# a constant learning rate, logs optionally to W&B, and saves the resulting
+# matched pair in the native formats used by evaluate.py.
 from __future__ import annotations
 
 import argparse
@@ -20,7 +20,6 @@ if str(PROJECT_ROOT) not in sys.path:
 import numpy as np
 import torch
 from torch.utils.data import DataLoader, Subset
-from tqdm.auto import tqdm
 
 from helmholtz_hybrid.cli_config import apply_yaml_defaults, config_path_from_argv
 from helmholtz_hybrid.data import dataloader_performance_kwargs, load_task_dataset
@@ -31,11 +30,10 @@ from helmholtz_hybrid.hybrid_comparison import (
     scot_contrast_checkpoint,
 )
 from helmholtz_hybrid.hybrid_finetuning import (
-    EndToEndHybridOperator,
+    FrozenFNOHybridOperator,
     EpochMetrics,
     append_epoch_metrics,
     evaluate_hybrid_epoch,
-    make_epoch_scheduler,
     save_hybrid_checkpoint,
     train_hybrid_epoch,
 )
@@ -51,12 +49,12 @@ from helmholtz_hybrid.runtime import (
 
 
 def parse_args() -> argparse.Namespace:
-    """Parse end-to-end hybrid fine-tuning options."""
+    """Parse frozen-FNO scOT fine-tuning options."""
 
     parser = argparse.ArgumentParser(
         description=(
-            "Jointly fine-tune a released smooth-task FNO and capacity-matched "
-            "residual-task scOT against full sharp-pressure targets."
+            "Fine-tune a residual-task scOT for one epoch using pressure from a "
+            "frozen, capacity-matched smooth-task FNO."
         ),
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
@@ -64,7 +62,7 @@ def parse_args() -> argparse.Namespace:
         "--config",
         type=Path,
         default=None,
-        help="Optional flat YAML file containing default fine-tuning options.",
+        help="Optional flat YAML file containing default scOT fine-tuning options.",
     )
     parser.add_argument(
         "--data-root",
@@ -107,22 +105,10 @@ def parse_args() -> argparse.Namespace:
         help="Optional run directory name; otherwise a capacity/seed/timestamp name is used.",
     )
     parser.add_argument(
-        "--epochs",
-        type=int,
-        default=10,
-        help="Number of joint fine-tuning epochs after the epoch-0 baseline.",
-    )
-    parser.add_argument(
-        "--warmup-epochs",
-        type=int,
-        default=1,
-        help="Number of linear warmup epochs before cosine learning-rate decay.",
-    )
-    parser.add_argument(
         "--learning-rate",
         type=float,
         default=1e-4,
-        help="Peak AdamW learning rate shared by both pretrained components.",
+        help="Constant AdamW learning rate used for the single scOT epoch.",
     )
     parser.add_argument(
         "--weight-decay",
@@ -131,16 +117,10 @@ def parse_args() -> argparse.Namespace:
         help="AdamW decoupled weight-decay coefficient.",
     )
     parser.add_argument(
-        "--eta-min",
-        type=float,
-        default=1e-6,
-        help="Minimum learning rate for cosine decay.",
-    )
-    parser.add_argument(
         "--max-grad-norm",
         type=float,
         default=1.0,
-        help="Maximum joint gradient norm; set to 0 to disable clipping.",
+        help="Maximum scOT gradient norm; set to 0 to disable clipping.",
     )
     parser.add_argument(
         "--batch-size",
@@ -256,7 +236,7 @@ def make_run_name(args: argparse.Namespace) -> str:
         return args.run_name
     stamp = time.strftime("%Y%m%d-%H%M%S")
     return (
-        f"hybrid_{args.dataset}_end2end_layers{args.size}_"
+        f"hybrid_{args.dataset}_scot_finetune_layers{args.size}_"
         f"depths{args.size}-{args.size}-{args.size}-{args.size}_"
         f"seed{args.seed}_{stamp}"
     )
@@ -267,22 +247,10 @@ def validate_args(args: argparse.Namespace, output_dir: Path) -> None:
 
     if args.size < 1:
         raise ValueError(f"--size must be positive; got {args.size}.")
-    if args.epochs < 1:
-        raise ValueError(f"--epochs must be positive; got {args.epochs}.")
-    if args.warmup_epochs < 0 or args.warmup_epochs >= args.epochs:
-        raise ValueError(
-            "--warmup-epochs must satisfy 0 <= warmup < epochs; "
-            f"got {args.warmup_epochs} and {args.epochs}."
-        )
     if args.learning_rate <= 0:
         raise ValueError(f"--learning-rate must be positive; got {args.learning_rate}.")
     if args.weight_decay < 0:
         raise ValueError(f"--weight-decay must be non-negative; got {args.weight_decay}.")
-    if args.eta_min < 0 or args.eta_min > args.learning_rate:
-        raise ValueError(
-            "--eta-min must be non-negative and no larger than --learning-rate; "
-            f"got {args.eta_min} and {args.learning_rate}."
-        )
     if args.max_grad_norm < 0:
         raise ValueError(f"--max-grad-norm must be non-negative; got {args.max_grad_norm}.")
     if args.batch_size < 1:
@@ -320,7 +288,7 @@ def validate_args(args: argparse.Namespace, output_dir: Path) -> None:
     if unique_missing:
         missing_list = "\n".join(f"  - {path}" for path in unique_missing)
         raise FileNotFoundError(
-            "Missing end-to-end fine-tuning inputs:\n"
+            "Missing frozen-FNO scOT fine-tuning inputs:\n"
             f"{missing_list}\n"
             "Check --data-root, --checkpoint-root, --dataset, and --size."
         )
@@ -338,7 +306,7 @@ def print_plan(args: argparse.Namespace, output_dir: Path) -> None:
     print(f"Initial scOT: {scot_checkpoint}")
     print(f"Run output: {output_dir}")
     print(
-        f"Schedule: {args.epochs} epochs, peak LR {args.learning_rate:g}, "
+        f"Schedule: 1 epoch, constant LR {args.learning_rate:g}, "
         f"physical batch {args.batch_size}, effective batch {effective_batch_size}"
     )
 
@@ -378,7 +346,7 @@ def limited_dataset(dataset, maximum: int | None):
 
 
 def run(args: argparse.Namespace) -> int:
-    """Load the pretrained pair, fine-tune both components, and save the best."""
+    """Load the pretrained pair, fine-tune scOT once, and save the result."""
 
     run_name = make_run_name(args)
     output_dir = args.output_root / run_name
@@ -417,7 +385,7 @@ def run(args: argparse.Namespace) -> int:
 
     initial_fno = fno_smooth_checkpoint(args.checkpoint_root, args.dataset, args.size)
     initial_scot = scot_contrast_checkpoint(args.checkpoint_root, args.dataset, args.size)
-    model = EndToEndHybridOperator(
+    model = FrozenFNOHybridOperator(
         load_fno_checkpoint(initial_fno, device),
         load_scot_checkpoint(initial_scot, device),
     ).to(device)
@@ -425,20 +393,10 @@ def run(args: argparse.Namespace) -> int:
     scot_parameters = count_parameters(model.contrast_model)
     total_parameters = fno_parameters + scot_parameters
 
-    # Use neuralop's AdamW, as in the released FNO training, because it supports
-    # the FNO's complex spectral parameters and ordinary real scOT parameters.
-    import neuralop
-
-    optimizer = neuralop.training.AdamW(
-        model.parameters(),
+    optimizer = torch.optim.AdamW(
+        model.contrast_model.parameters(),
         lr=args.learning_rate,
         weight_decay=args.weight_decay,
-    )
-    scheduler = make_epoch_scheduler(
-        optimizer,
-        epochs=args.epochs,
-        warmup_epochs=args.warmup_epochs,
-        eta_min=args.eta_min,
     )
 
     output_dir.mkdir(parents=True, exist_ok=False)
@@ -446,13 +404,13 @@ def run(args: argparse.Namespace) -> int:
         output_dir,
         args,
         run_name=run_name,
-        model_type="hybrid_end_to_end",
+        model_type="hybrid_scot_finetune",
         parameters=total_parameters,
     )
     print(f"Training on {device}")
     print(
-        f"Trainable parameters: {total_parameters:,} "
-        f"(FNO {fno_parameters:,}; scOT {scot_parameters:,})"
+        f"Architecture parameters: {total_parameters:,} "
+        f"(frozen FNO {fno_parameters:,}; trainable scOT {scot_parameters:,})"
     )
     print(f"Run manifest: {manifest_path}")
 
@@ -464,10 +422,10 @@ def run(args: argparse.Namespace) -> int:
         "fno_parameters": fno_parameters,
         "scot_parameters": scot_parameters,
         "parameters": total_parameters,
+        "fno_frozen": True,
+        "training_epochs": 1,
+        "constant_learning_rate": args.learning_rate,
     }
-    best_validation = float("inf")
-    best_epoch = -1
-
     try:
         baseline_validation = evaluate_hybrid_epoch(
             model,
@@ -482,15 +440,6 @@ def run(args: argparse.Namespace) -> int:
             learning_rate=float(optimizer.param_groups[0]["lr"]),
         )
         append_epoch_metrics(metrics_path, baseline_metrics)
-        best_validation = baseline_validation
-        best_epoch = 0
-        save_hybrid_checkpoint(
-            model,
-            output_dir / "best",
-            epoch=0,
-            validation_mean_relative_l2=baseline_validation,
-            extra_metadata=checkpoint_metadata,
-        )
         if wandb_run is not None:
             wandb_run.log(
                 {
@@ -502,73 +451,58 @@ def run(args: argparse.Namespace) -> int:
             )
         print(f"Epoch 0 pretrained validation relative L2: {baseline_validation:.6f}")
 
-        epoch_iterator = tqdm(
-            range(1, args.epochs + 1),
-            desc="fine-tuning",
-            unit="epoch",
-            dynamic_ncols=True,
-            position=0,
-            disable=not sys.stderr.isatty(),
+        learning_rate = float(optimizer.param_groups[0]["lr"])
+        train_error = train_hybrid_epoch(
+            model,
+            train_loader,
+            optimizer,
+            device,
+            epoch=1,
+            gradient_accumulation_steps=args.gradient_accumulation_steps,
+            max_grad_norm=args.max_grad_norm,
         )
-        for epoch in epoch_iterator:
-            learning_rate = float(optimizer.param_groups[0]["lr"])
-            train_error = train_hybrid_epoch(
-                model,
-                train_loader,
-                optimizer,
-                device,
-                epoch=epoch,
-                gradient_accumulation_steps=args.gradient_accumulation_steps,
-                max_grad_norm=args.max_grad_norm,
+        validation_error = evaluate_hybrid_epoch(
+            model,
+            validation_loader,
+            device,
+            epoch=1,
+        )
+        metrics = EpochMetrics(
+            epoch=1,
+            train_mean_relative_l2=train_error,
+            validation_mean_relative_l2=validation_error,
+            learning_rate=learning_rate,
+        )
+        append_epoch_metrics(metrics_path, metrics)
+        save_hybrid_checkpoint(
+            model,
+            output_dir / "checkpoint",
+            epoch=1,
+            validation_mean_relative_l2=validation_error,
+            extra_metadata={
+                **checkpoint_metadata,
+                "baseline_validation_mean_relative_l2": baseline_validation,
+                "improved_validation": validation_error < baseline_validation,
+            },
+        )
+        if wandb_run is not None:
+            wandb_run.log(
+                {
+                    "epoch": 1,
+                    "train/mean_relative_l2": train_error,
+                    "validation/mean_relative_l2": validation_error,
+                    "learning_rate": learning_rate,
+                },
+                step=1,
             )
-            validation_error = evaluate_hybrid_epoch(
-                model,
-                validation_loader,
-                device,
-                epoch=epoch,
-            )
-            metrics = EpochMetrics(
-                epoch=epoch,
-                train_mean_relative_l2=train_error,
-                validation_mean_relative_l2=validation_error,
-                learning_rate=learning_rate,
-            )
-            append_epoch_metrics(metrics_path, metrics)
-
-            if validation_error < best_validation:
-                best_validation = validation_error
-                best_epoch = epoch
-                save_hybrid_checkpoint(
-                    model,
-                    output_dir / "best",
-                    epoch=epoch,
-                    validation_mean_relative_l2=validation_error,
-                    extra_metadata=checkpoint_metadata,
-                )
-            if wandb_run is not None:
-                wandb_run.log(
-                    {
-                        "epoch": epoch,
-                        "train/mean_relative_l2": train_error,
-                        "validation/mean_relative_l2": validation_error,
-                        "learning_rate": learning_rate,
-                        "best_validation/mean_relative_l2": best_validation,
-                    },
-                    step=epoch,
-                )
-            epoch_iterator.set_postfix_str(
-                f"train={train_error:.4f}, val={validation_error:.4f}, "
-                f"best={best_validation:.4f}@{best_epoch}"
-            )
-            scheduler.step()
 
         completion = {
             "status": "completed",
-            "completed_epochs": args.epochs,
-            "requested_epochs": args.epochs,
+            "completed_epochs": 1,
+            "requested_epochs": 1,
             "baseline_validation_mean_relative_l2": baseline_validation,
-            "best_validation_mean_relative_l2": best_validation,
-            "best_epoch": best_epoch,
+            "finetuned_validation_mean_relative_l2": validation_error,
+            "improved_validation": validation_error < baseline_validation,
             "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
         }
         (output_dir / "training_complete.json").write_text(
@@ -576,18 +510,18 @@ def run(args: argparse.Namespace) -> int:
         )
         if wandb_run is not None:
             wandb_run.summary["baseline_validation_mean_relative_l2"] = baseline_validation
-            wandb_run.summary["best_validation_mean_relative_l2"] = best_validation
-            wandb_run.summary["best_epoch"] = best_epoch
+            wandb_run.summary["finetuned_validation_mean_relative_l2"] = validation_error
+            wandb_run.summary["improved_validation"] = validation_error < baseline_validation
     finally:
         if wandb_run is not None:
             wandb_run.finish()
 
     print(
-        f"Completed {args.epochs} epochs. Best validation relative L2 "
-        f"{best_validation:.6f} at epoch {best_epoch}."
+        f"Completed 1 scOT fine-tuning epoch at constant LR {args.learning_rate:g}. "
+        f"Validation relative L2: {baseline_validation:.6f} -> {validation_error:.6f}."
     )
-    print(f"Best FNO checkpoint: {output_dir / 'best' / 'fno'}")
-    print(f"Best scOT checkpoint: {output_dir / 'best' / 'scot'}")
+    print(f"Frozen FNO checkpoint: {output_dir / 'checkpoint' / 'fno'}")
+    print(f"Fine-tuned scOT checkpoint: {output_dir / 'checkpoint' / 'scot'}")
     return 0
 
 

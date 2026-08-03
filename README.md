@@ -225,31 +225,33 @@ manuscript-ready `hybrid_smooth_source_comparison_table.tex` next to it. Use
 `--dry-run` to validate all data and checkpoint paths without loading models,
 or `--max-samples 64 --sizes 2` for a quick GPU smoke test.
 
-### Fine-tune the hybrid end to end
+### Fine-tune scOT on frozen-FNO input
 
-The released smooth FNO and capacity-matched residual scOT can also be jointly
-fine-tuned against the sharp-pressure target. This makes gradients from the
-full reconstruction flow through both components. The ten-epoch exploratory
-configuration uses an effective batch size of 32:
+The residual scOT can be adapted to the smooth pressure actually produced by
+its capacity-matched FNO. The FNO remains frozen and in evaluation mode; only
+scOT is optimized for one epoch against the reconstructed sharp-pressure
+target. The learning rate is constant at `1e-4`, and the configuration uses an
+effective batch size of 32:
 
 ```bash
 python scripts/finetune_hybrid.py \
-  --config configs/hybrid_finetune_10epoch.yaml \
+  --config configs/hybrid_finetune_scot_1epoch.yaml \
   --data-root data/processed \
   --dataset const_back \
   --checkpoint-root outputs/checkpoints/const_back/paper \
   --size 2 \
   --device cuda:0 \
   --wandb-project hybrid-architectures \
-  --wandb-group hybrid-end-to-end-10epoch
+  --wandb-group hybrid-scot-finetune-1epoch
 ```
 
-The script first records the pretrained hybrid's validation error as epoch 0,
-then validates after every joint training epoch. It writes append-only
-`metrics.jsonl`, a run manifest, completion metadata, and the best matched pair
-under `<run>/best/fno` and `<run>/best/scot`. Those two checkpoint directories
-can be passed directly to `scripts/evaluate.py`. For a quick functional check,
-add `--max-train-samples 64 --max-validation-samples 64 --epochs 1 --warmup-epochs 0`.
+The script records the pretrained hybrid's validation error as epoch 0, trains
+scOT for epoch 1, and validates the result. It writes append-only
+`metrics.jsonl`, a run manifest, completion metadata, and the resulting matched
+pair under `<run>/checkpoint/fno` and `<run>/checkpoint/scot`. The saved FNO is
+unchanged; it is included so those directories can be passed directly to
+`scripts/evaluate.py`. For a quick functional check, add
+`--max-train-samples 64 --max-validation-samples 64`.
 
 
 ## Data Layout
